@@ -31,9 +31,11 @@ def get_gspread_client():
 # --- LOGIQUE DE TRAITEMENT ---
 def process_insta_data(data):
     rows = []
-    # On saute l'en-tête si nécessaire, ici on traite tout
-    for row in data[1:]: 
-        if not any(row): continue
+    # On vérifie si la première ligne est une entête. Si oui, on commence à la ligne 1.
+    # Si les données commencent direct à la ligne 0, on change data[1:] par data[0:]
+    for row in data: 
+        if not any(row) or row[0] == "Nom destinataire": # Ignore les lignes vides ou l'entête
+            continue
         row = row + [""] * 20
         rows.append([
             row[0], row[4], row[12], f"{row[1]} {row[3]}", row[8], row[7], 1, "", 
@@ -45,8 +47,9 @@ def process_insta_data(data):
 def process_jetpack_data(data):
     rows = []
     jours = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
-    for row in data[1:]:
-        if not any(row): continue
+    for row in data:
+        if not any(row) or row[0] == "Nom":
+            continue
         row = row + [""] * 10
         tel_clean = nettoyer_numero_tel(row[4])
         msg = str(row[5]).strip().lower() if str(row[5]).strip().lower() in jours else ""
@@ -62,14 +65,19 @@ tab1, tab2 = st.tabs(["📦 Insta-Delivery", "✈️ Jetpack"])
 # --- ONGLET INSTA-DELIVERY ---
 with tab1:
     if st.button("🔄 Charger données Insta"):
-        with st.spinner("Connexion à Google Sheets en cours..."):
+        with st.spinner("Récupération des données..."):
             try:
                 client = get_gspread_client()
+                # Correction ici pour bien récupérer TOUTES les valeurs
                 data = client.open_by_key(SHEET_KEY).worksheet("insta").get_all_values()
-                st.session_state['df_insta'] = process_insta_data(data)
-                st.success(f"✅ {len(st.session_state['df_insta'])} lignes récupérées !")
+                df = process_insta_data(data)
+                if not df.empty:
+                    st.session_state['df_insta'] = df
+                    st.success(f"✅ {len(df)} lignes récupérées !")
+                else:
+                    st.warning("⚠️ Aucune donnée trouvée dans la feuille 'insta'. Vérifiez que vos données ne sont pas sur la ligne d'entête.")
             except Exception as e:
-                st.error(f"Erreur : {e}")
+                st.error(f"Erreur de connexion : {e}")
     
     if 'df_insta' in st.session_state:
         st.dataframe(st.session_state['df_insta'], use_container_width=True)
@@ -77,13 +85,12 @@ with tab1:
         if st.button("🚀 Confirmer l'envoi vers Insta-Delivery"):
             url = "https://app.insta-delivery.com/API/add"
             succes, echecs = 0, 0
-            
             status_text = st.empty()
             progress_bar = st.progress(0)
             
             df = st.session_state['df_insta']
             for i, row in df.iterrows():
-                status_text.text(f"Envoi du colis {i+1}/{len(df)} : {row['Nom']}")
+                status_text.text(f"Envoi {i+1}/{len(df)} : {row['Nom']}")
                 payload = {
                     "login": "shop-p5", "password": "81490", "reference": f"GS_{i+1}",
                     "nom": row["Nom"], "tel": str(row["Tel"]), "code": str(row["CP"]),
@@ -97,23 +104,24 @@ with tab1:
                     if r.status_code == 200: succes += 1
                     else: echecs += 1
                 except: echecs += 1
-                
                 progress_bar.progress((i + 1) / len(df))
-                time.sleep(0.1) # Petite pause pour l'animation
             
-            status_text.empty()
             st.balloons()
-            st.success(f"Terminé ! 🏆 Succès: {succes} | ❌ Échecs: {echecs}")
+            st.success(f"Terminé ! Succès: {succes} | Échecs: {echecs}")
 
 # --- ONGLET JETPACK ---
 with tab2:
     if st.button("🔄 Charger données Jetpack"):
-        with st.spinner("Récupération des données Jetpack..."):
+        with st.spinner("Récupération..."):
             try:
                 client = get_gspread_client()
                 data = client.open_by_key(SHEET_KEY).worksheet("jetpack").get_all_values()
-                st.session_state['df_jetpack'] = process_jetpack_data(data)
-                st.success(f"✅ {len(st.session_state['df_jetpack'])} lignes récupérées !")
+                df = process_jetpack_data(data)
+                if not df.empty:
+                    st.session_state['df_jetpack'] = df
+                    st.success(f"✅ {len(df)} lignes récupérées !")
+                else:
+                    st.warning("⚠️ Aucune donnée trouvée dans 'jetpack'.")
             except Exception as e:
                 st.error(f"Erreur : {e}")
     
@@ -123,23 +131,19 @@ with tab2:
         if st.button("🚀 Confirmer l'envoi vers Jetpack"):
             url = "https://www.jetpack.tn/apis/shopp12-SFJKJSV348FK29HFSKDKDB438UJFDKJF394UTDJFDKDCVR56/v1/post.php"
             succes, echecs = 0, 0
-            
             status_text = st.empty()
             progress_bar = st.progress(0)
             
             df = st.session_state['df_jetpack']
             for i, row in df.iterrows():
-                status_text.text(f"Envoi Jetpack {i+1}/{len(df)} : {row['nom']}")
+                status_text.text(f"Envoi {i+1}/{len(df)} : {row['nom']}")
                 payload = row.to_dict()
                 try:
                     r = requests.post(url, data=payload, timeout=15)
                     if r.status_code == 200: succes += 1
                     else: echecs += 1
                 except: echecs += 1
-                
                 progress_bar.progress((i + 1) / len(df))
-                time.sleep(0.1)
             
-            status_text.empty()
             st.balloons()
-            st.success(f"Terminé ! 🏆 Succès: {succes} | ❌ Échecs: {echecs}")
+            st.success(f"Terminé ! Succès: {succes} | Échecs: {echecs}")
